@@ -33,6 +33,51 @@ def load_data():
     return np.array(coordinates), np.array(labels)
 
 
+def plot_data_with_decision_boundary(classifiers, alphas, X_train, y_train, file_path, num_of_iterations,
+                                     num_classifiers=8):
+    """
+    Plot the data points along with the decision boundaries of the specified number of ensemble classifiers.
+
+    Args:
+        classifiers: List of selected classifiers.
+        alphas: List of corresponding classifier weights.
+        X_train: Input features of the training set.
+        y_train: True labels of the training set.
+        file_path: File path to the data file.
+        num_classifiers: Number of classifiers to plot decision boundaries for (default is 8).
+    """
+
+    # Load the data from the file
+    data = np.loadtxt(file_path)
+    coordinates, labels = data[:, :2], data[:, 2]
+
+    # Define the plot boundaries based on the range of the training data
+    x_min, x_max = X_train[:, 0].min() - 1, X_train[:, 0].max() + 1
+    y_min, y_max = X_train[:, 1].min() - 1, X_train[:, 1].max() + 1
+
+    # Generate a mesh grid
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+                         np.arange(y_min, y_max, 0.1))
+
+    # Plot each classifier's decision boundary
+    for alpha, classifier in zip(alphas[:num_classifiers], classifiers[:num_classifiers]):
+        Z = predict(np.c_[xx.ravel(), yy.ravel()], classifier)
+        Z = Z.reshape(xx.shape)
+        plt.contour(xx, yy, Z, alpha=0.4)
+
+    # Plot the training data
+    plt.scatter(X_train[:, 0], X_train[:, 1], c=y_train, marker='o', cmap=plt.cm.coolwarm, label='Training Data', s=25)
+
+    # Plot the data points from the file
+    plt.scatter(coordinates[:, 0], coordinates[:, 1], c=labels, marker='x', cmap=plt.cm.coolwarm, label='File Data',
+                s=25)
+
+    plt.xlabel('X1')
+    plt.ylabel('X2')
+    plt.title(f"Data Points and Decision Boundaries on run {num_of_iterations}")
+    plt.legend()
+    plt.show()
+
 # Define hypothesis set using pairs of points
 def generate_rules(X_train):
     """
@@ -119,14 +164,16 @@ def compute_weighted_error(predictions, true_labels, weights):
 class Adaboost:
 
     def __init__(self, x, y, iterations, k_most_important):
-        self.x = x
-        self.y = y
-        self.iterations = iterations
-        self.k_most_important = k_most_important
-        self.empirical_errors = np.zeros(shape=k_most_important)
-        self.true_errors = np.zeros(shape=k_most_important)
-        self.classifiers = []
-        self.alphas = []
+        self.x = x  # data
+        self.y = y  # label [-1 ,1]
+        self.iterations = iterations  # number of run to run Adaboost
+        self.k_most_important = k_most_important  # number rules
+        self.empirical_errors = np.zeros(
+            shape=k_most_important)  # save the empirical error for each run for doing the average later
+        self.true_errors = np.zeros(
+            shape=k_most_important)  # save the true errors for each run for doing the average later
+        self.classifiers = []  # save the rules of the current run of Adaboost
+        self.alphas = []  # save the wights of the current run of Adaboost
 
     def get_classifiers(self):
         return self.classifiers
@@ -183,20 +230,9 @@ class Adaboost:
                 plot_data_with_decision_boundary(adaboost.get_classifiers(), adaboost.get_alphas(), X_train, y_train,
                                                  'circle_separator.txt', num_of_iterations=run, num_classifiers=8)
 
-    def update_point_weights(self, weights, alpha_t, X_train, selected_classifier, y_train):
-        """
-        Update point weights
-                # 𝐷_(𝑡+1) (𝑥_𝑖 )=1/𝑍_𝑡  𝐷_𝑡 (𝑥_𝑖 ) 𝑒_^(−𝛼_𝑡 ℎ_𝑡 (𝑥_𝑖 ) 𝑦_𝑖 )
-                # where Zt is a normalizing constant giving ∑_𝑖▒〖𝐷_(𝑡+1) (𝑥_𝑖 )=1〗
-        """
-        update_point_weights = weights * np.exp(-alpha_t * predict(X_train, selected_classifier) * y_train)
-        normalizing_constant = np.sum(update_point_weights)
-        update_point_weights /= normalizing_constant
-        return update_point_weights
-
     def evaluate_classifier(self, x_train, y_train, x_test, y_test, classifiers, alphas, index):
         """
-        Evaluate the ensemble classifier H_k on the given training and test datasets.
+        Evaluate the classifier H_k on the given training and test datasets.
 
         Args:
             X_train: Input features of the training set.
@@ -206,16 +242,11 @@ class Adaboost:
             classifiers: List of selected classifiers.
             alphas: List of corresponding classifier weights.
             index: the current index from 1..k
-
-        Returns:
-            Tuple containing:
-                - empirical_error_train: Empirical error of the ensemble classifier on the training set.
-                - true_error_test: True error of the ensemble classifier on the test set.
         """
 
         # Accumulate weighted predictions for each data point
-        train_predictions = np.zeros(shape=len(x_train))
-        test_predictions = np.zeros(shape=len(x_test))
+        train_predictions = np.zeros(len(x_train))
+        test_predictions = np.zeros(len(x_test))
 
         # 𝐻𝑘(𝑥)=𝑠𝑖𝑔𝑛(Σ𝛼𝑖ℎ𝑖(𝑥))
         for alpha, classifier in zip(alphas, classifiers):
@@ -246,51 +277,22 @@ class Adaboost:
                 f"Difference (True - Empirical) = "
                 f"{np.absolute((self.true_errors[k] / self.iterations) - (self.empirical_errors[k] / self.iterations))}")
 
+    @staticmethod
+    def update_point_weights(weights, alpha_t, X_train, selected_classifier, y_train):
+        """
+        Update point weights
+                # 𝐷_(𝑡+1) (𝑥_𝑖 )=1/𝑍_𝑡  𝐷_𝑡 (𝑥_𝑖 ) 𝑒_^(−𝛼_𝑡 ℎ_𝑡 (𝑥_𝑖 ) 𝑦_𝑖 )
+                # where Zt is a normalizing constant giving ∑_𝑖▒〖𝐷_(𝑡+1) (𝑥_𝑖 )=1〗
+        """
+        update_point_weights = weights * np.exp(-alpha_t * predict(X_train, selected_classifier) * y_train)
+        normalizing_constant = np.sum(update_point_weights)
+        update_point_weights /= normalizing_constant
+        return update_point_weights
 
-def plot_data_with_decision_boundary(classifiers, alphas, X_train, y_train, file_path, num_of_iterations,
-                                     num_classifiers=8):
-    """
-    Plot the data points along with the decision boundaries of the specified number of ensemble classifiers.
 
-    Args:
-        classifiers: List of selected classifiers.
-        alphas: List of corresponding classifier weights.
-        X_train: Input features of the training set.
-        y_train: True labels of the training set.
-        file_path: File path to the data file.
-        num_classifiers: Number of classifiers to plot decision boundaries for (default is 8).
-    """
 
-    # Load the data from the file
-    data = np.loadtxt(file_path)
-    coordinates, labels = data[:, :2], data[:, 2]
 
-    # Define the plot boundaries based on the range of the training data
-    x_min, x_max = X_train[:, 0].min() - 1, X_train[:, 0].max() + 1
-    y_min, y_max = X_train[:, 1].min() - 1, X_train[:, 1].max() + 1
 
-    # Generate a mesh grid
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
-                         np.arange(y_min, y_max, 0.1))
-
-    # Plot each classifier's decision boundary
-    for alpha, classifier in zip(alphas[:num_classifiers], classifiers[:num_classifiers]):
-        Z = predict(np.c_[xx.ravel(), yy.ravel()], classifier)
-        Z = Z.reshape(xx.shape)
-        plt.contour(xx, yy, Z, alpha=0.4)
-
-    # Plot the training data
-    plt.scatter(X_train[:, 0], X_train[:, 1], c=y_train, marker='o', cmap=plt.cm.coolwarm, label='Training Data', s=25)
-
-    # Plot the data points from the file
-    plt.scatter(coordinates[:, 0], coordinates[:, 1], c=labels, marker='x', cmap=plt.cm.coolwarm, label='File Data',
-                s=25)
-
-    plt.xlabel('X1')
-    plt.ylabel('X2')
-    plt.title(f"Data Points and Decision Boundaries on run {num_of_iterations}")
-    plt.legend()
-    plt.show()
 
 
 if __name__ == '__main__':
